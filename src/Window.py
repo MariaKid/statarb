@@ -1,16 +1,13 @@
 import sys
 import pandas as pd
-import numpy as np
 from pandas import DataFrame
 
 from datetime import date, timedelta
 from typing import List, Optional
-from sklearn.linear_model import LinearRegression
-from statsmodels.tsa.api import adfuller
 
 from src.DataRepository import DataRepository, Universes
 from src.Features import Features
-from src.Tickers import Tickers, SnpTickers
+from src.Tickers import Tickers
 
 
 class Window:
@@ -47,23 +44,23 @@ class Window:
         window_trading_days = self.repository.all_dates[start_idx: start_idx + window_length.days]
         return window_trading_days
 
-    def __update_window_data(self, trading_dates_to_get_data_for: List[date]):
+    def __update_window_data(self, trading_dates: List[date]):
         """
         Creates two new attributes, self.etf_data and self.snp_data, by assigning them the DataFrame outputted from
         DataRepository.remove_dead_tickers()
-        Checks if data has been uploaded, if not, uploads it from disk. If the window ends after ETF or SNP data's last
-        day, it loads the data for the next window_length days
+
+        If the window ends after ETF or SNP data's last  day, it loads the data for the next window_length days
 
         Parameters:
-            trading_dates_to_get_data_for = trading days range for data
+            trading_dates = trading days range for data
         """
         # Remove duplicates
-        trading_dates_to_get_data_for = sorted(set(trading_dates_to_get_data_for))
+        trading_dates = sorted(set(trading_dates))
 
         # Load data if no data available
         if self.repository.all_data[Universes.SNP] is None or self.repository.all_data[Universes.ETFs] is None:
-            self.repository.get(Universes.ETFs, trading_dates_to_get_data_for)
-            self.repository.get(Universes.SNP, trading_dates_to_get_data_for)
+            self.repository.get(Universes.ETFs, trading_dates)
+            self.repository.get(Universes.SNP, trading_dates)
 
         # Set date from which new data should be loaded if available
         next_load_start_date = min(max(self.repository.all_data[Universes.SNP].index),
@@ -74,8 +71,8 @@ class Window:
             self.repository.get(Universes.ETFs, look_forward_win_dates)
             self.repository.get(Universes.SNP, look_forward_win_dates)
 
-        lookback_temp_etf_data = self.repository.all_data[Universes.ETFs].loc[trading_dates_to_get_data_for]
-        lookback_temp_snp_data = self.repository.all_data[Universes.SNP].loc[trading_dates_to_get_data_for]
+        lookback_temp_etf_data = self.repository.all_data[Universes.ETFs].loc[trading_dates]
+        lookback_temp_snp_data = self.repository.all_data[Universes.SNP].loc[trading_dates]
 
         # ignore the first value of the output of remove_dead_tickers() with '_'
         _, self.etf_data = self.repository.remove_dead_tickers(Universes.ETFs, lookback_temp_etf_data)
@@ -89,7 +86,6 @@ class Window:
         self.window_end = self.__get_nth_working_day_ahead(self.window_end, 1)
 
         self.lookback_win_dates = self.__get_window_trading_days(self.window_start, self.window_length)
-        # last window trading date should be today + 1 because today gets updated after this function gets called
         self.__update_window_data(self.lookback_win_dates)
 
     def __get_nth_working_day_ahead(self, target: date, n: int) -> date:
@@ -145,16 +141,3 @@ class Window:
             return data.loc[:, pd.IndexSlice[:, features]]
         elif tickers is not None and features is not None:
             return data.loc[:, pd.IndexSlice[tickers, features]]
-
-    def get_fundamental(self):
-        return self.repository.get_fundamental(self.window_end)
-
-
-if __name__ == "__main__":
-    win_length = timedelta(days=15)
-    today = date(year=2008, month=1, day=2)
-    window = Window(window_start=today,
-                    trading_win_len=win_length,
-                    repository=DataRepository())
-
-    print(window.repository)
