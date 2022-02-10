@@ -3,12 +3,11 @@ import re
 import numpy as np
 import pandas as pd
 
+from pandas import DataFrame, IndexSlice, Series
 from datetime import date
 from enum import Enum, unique
 from pathlib import Path
 from typing import Dict, Optional, Set, List
-from pandas import DataFrame, IndexSlice
-from pandas import Series as Se
 
 from src.Features import Features
 from src.Tickers import EtfTickers, SnpTickers, Tickers
@@ -27,39 +26,34 @@ class DataRepository:
         self.features: Dict[Universes, Optional[Set[Features]]] = {Universes.SNP: None, Universes.ETFs: None}
         self.all_dates: List[date] = self.__load_dates()
 
-    def get(self,
-            datatype: Universes,
-            trading_dates: List[date]):
-        self.__get_from_disk_and_store(datatype, trading_dates)
-
-    def remove_dead_tickers(self, datatype: Universes, alive_and_dead_ticker_data: DataFrame) -> (List[Tickers], DataFrame):
+    def remove_dead_tickers(self, datatype: Universes, all_ticker_data: DataFrame) -> (List[Tickers], DataFrame):
         """
         Cleans the given ticker data by removing columns (tickers) with NaN values
 
         Parameters:
             datatype: Universes.SNP or Universes.ETF
-            alive_and_dead_ticker_data: ticker data
+            all_ticker_data: ticker data
 
         Returns:
-            alive_tickers, alive_ticker_data: tuple with list of live tickers and portion of initial dataframe with
-            live tickers
+            alive_tickers: list of live tickers
+            alive_ticker_data: portion of initial dataframe with live tickers
         """
         alive_tickers = [i for i in self.tickers[datatype]]
         junk_val = 'XXXXX'
 
         for idx, ticker in enumerate(self.tickers[datatype]):
-            # Fetch first column of data for ticker (feature e.g. close price, volume... is irrelevant)
-            column = alive_and_dead_ticker_data.loc[:, ticker].iloc[:, 0]
-            # Check data in column is NaN
-            is_nans = [True if math.isnan(i) else False for i in column]
+            # Fetch first column of data for ticker (any feature can be chosen)
+            column = all_ticker_data.loc[:, pd.IndexSlice[ticker, Features.CLOSE]]
+            # Check NaN and negative price
+            is_nans = [True if (math.isnan(i) or i <= 0) else False for i in column]
 
+            # Ticker is not live for current window
             if any(is_nans):
-                # Ticker is live for current window
                 alive_tickers[idx] = junk_val
 
         # Remove tickers with all NaNs
         alive_tickers = [i for i in alive_tickers if i != junk_val]
-        alive_ticker_data = alive_and_dead_ticker_data.loc[:, IndexSlice[alive_tickers, :]]
+        alive_ticker_data = all_ticker_data.loc[:, IndexSlice[alive_tickers, :]]
 
         return alive_tickers, alive_ticker_data
 
@@ -82,16 +76,16 @@ class DataRepository:
 
         return common_dates
 
-    def check_date_equality(self, d1: date, d2: date) -> bool:
+    @staticmethod
+    def check_date_equality(d1: date, d2: date) -> bool:
         """
         Returns:
              True if day, month, year are the same
         """
-        return (d1.day == d2.day and
-                d1.month == d2.month and
-                d1.year == d2.year)
+        return d1.day == d2.day and d1.month == d2.month and d1.year == d2.year
 
-    def __normalised_true_range(self, row: Se) -> float:
+    @staticmethod
+    def __normalised_true_range(row: Series) -> float:
         """
         Returns:
             normalised true range defined by max(high-low, high-close, close-low)/close
@@ -100,11 +94,10 @@ class DataRepository:
         """
         try:
             return max(row[1] - row[2], abs(row[1] - row[0]), abs(row[2] - row[0])) / row[0]
-
         except RuntimeError:
             return np.nan()
 
-    def _intraday_vol(self, data: DataFrame, ticker) -> DataFrame:
+    def _intraday_vol(self, data: DataFrame, ticker: Tickers) -> DataFrame:
         """
         Returns:
              data: dataframe with filled values for INTRADAY_VOL column defined as normalised true range
@@ -152,7 +145,7 @@ class DataRepository:
 
         d.index = pd.to_datetime(d.index, format='%d/%m/%Y')
 
-        # Deconstruct column names e.g. A Adj Close to ['A', 'Adj', 'Close']
+        # Deconstruct column names e.g. A Adj Close to ['A', 'Adj', 'Close'] to construct MultiIndex
         match_results = [re.findall(r"(\w+)", col) for col in d.columns]
 
         if datatype is Universes.SNP:
@@ -170,8 +163,7 @@ class DataRepository:
             names=['Ticker', 'Feature']
         )
 
-        #d = d.fillna(method='ffill')
-        d = self.forward_fill(d)
+        d = d.fillna(method='ffill')
 
         if Features.INTRADAY_VOL not in self.features[datatype]:
             print("- Engineering intraday volatility...\n")
@@ -184,46 +176,24 @@ class DataRepository:
         self.all_data[datatype] = pd.concat([self.all_data[datatype], d], axis=0).drop_duplicates(keep='first')
         self.all_data[datatype] = self.all_data[datatype].drop_duplicates(keep='first')
 
-    def _intraday_vol(self, data: DataFrame, ticker) -> DataFrame:
-        """
-        the function returns a pd.DataFrame with filled values for INTRADAY_VOL column defined as normalised true range
-        """
-
-        data.loc[:, IndexSlice[ticker, Features.INTRADAY_VOL]] \
-            = np.apply_along_axis(self.__normalised_true_range, 1,
-                                  data.loc[:, IndexSlice[ticker, [Features.HIGH, Features.LOW, Features.CLOSE]]])
-
-        return data
-
-    def __normalised_true_range(self, row: Se) -> float:
-        """returns normalised true range as defined by:
-        max(close-low, high-low,high-close)/close """
-        try:
-
-            ## original
-            # # https://www.investopedia.com/terms/a/atr.asp - we use the formula for TR and then divide by close
-            #return max(row[0] - row[0] , abs(row[0] - row[2]), abs(row[1] - row[2])) / row[2]
-
-            ## new
-            # https://www.investopedia.com/terms/a/atr.asp - we use the formula for TR and then divide by close
-            return max(row[1] - row[2], abs(row[1] - row[0]), abs(row[2] - row[0])) / row[0]
-
-        except RuntimeError:
-            return np.nan()
-
     def __get_fundamental_from_disk(self):
-        """the function updates the value of self.fundamental_data to pd.DataFrame
-        containing the fundamental characteristics for each ticker"""
-        data = pd.read_csv(Path(f"../resources/fundamental_snp.csv"),
-                           index_col=0)
+        """
+        Updates the value of self.fundamental_data to pd.DataFrame containing the
+        fundamental characteristics for each ticker
+        """
+        data = pd.read_csv(Path(f"../resources/fundamental_snp.csv"), index_col=0)
+
         data.index = pd.to_datetime(data.index, format='%Y-%m-%d')
         fundamental_start = date(2016, 3, 31)
         fundamental_date = [date for date in self.all_dates if date > fundamental_start]
+
         df = pd.DataFrame(index=fundamental_date)
         df = df.join(data, how='outer')
+
         match_results = [re.findall(r"(\w+)", col) for col in df.columns]
         funda_tickers = [SnpTickers(r[0]) for r in match_results]
         funda_features = [r[1] for r in match_results]
+
         df.columns = pd.MultiIndex.from_tuples(
             tuples=list(zip(funda_tickers, funda_features)),
             names=['ticker', 'feature'])
@@ -231,7 +201,5 @@ class DataRepository:
         self.fundamental_data = df
         return
 
-    def forward_fill(self, df: DataFrame) -> DataFrame:
-        """the function returns a pd.DataFrame with values filled forwards"""
-        return pd.DataFrame(df).fillna(method='ffill')
-
+    def get(self, datatype: Universes, trading_dates: List[date]):
+        self.__get_from_disk_and_store(datatype, trading_dates)

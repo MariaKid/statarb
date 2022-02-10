@@ -16,6 +16,7 @@ from src.Features import Features
 from src.Tickers import Tickers, SnpTickers, EtfTickers
 
 #modules needed for testing cointegrator
+# modules needed for testing cointegrator
 from src.Clusterer import Clusterer
 from datetime import date, timedelta
 
@@ -33,11 +34,15 @@ class CointegratedPair:
                  beta: float,
                  intercept: float,
                  z_score: float,
+                 adf_tstat: float,
+                 hurst_stat: float,
                  cointegration_rank: float):
         self.pair: List[Tickers] = pair
         self.beta: float = beta
         self.intercept: float = intercept
         self.z_score: float = z_score
+        self.adf_tstat: float = adf_tstat
+        self.hurst_stat: float = hurst_stat
         self.cointegration_rank: float = cointegration_rank
 
 
@@ -45,12 +50,10 @@ class Cointegrator:
     def __init__(self,
                  repository: DataRepository,
                  adf_confidence_level: AdfPrecisions,
-                 max_rev_time: float,
                  entry_z: float,
                  exit_z: float):
         self.repository: DataRepository = repository
         self.adf_confidence_level: AdfPrecisions = adf_confidence_level
-        self.max_rev_time: float = max_rev_time
         self.entry_z: float = entry_z
         self.exit_z: float = exit_z
 
@@ -76,7 +79,7 @@ class Cointegrator:
                             queue.put(pair)
         return queue
 
-    def regression_tests(self, current_window: Window, test_queue, results_queue) -> None:
+    def regression_tests(self, current_window: Window, test_queue, results_queue, adf_lag: int) -> None:
         """
         Fetches SNP + ETF pairs from queue, performs cointegration test and puts pair in queue if cointegration test
         passed
@@ -85,15 +88,14 @@ class Cointegrator:
             current_window: time window
             test_queue: queue of pairs to be tested for cointegration
             results_queue: queue of cointegrated pairs
+            adf_lag: lag in adf test set to length of lookback window
         """
         while not test_queue.empty():
             try:
-                # timeout prevents deadlock between threads which can occur when queue is empty
+                # timeout prevents deadlock between threads when queue is empty
                 pair = test_queue.get(timeout=1)
             except q.Empty:
                 break
-
-            print(pair)
             t_snp = current_window.get_data(universe=Universes.SNP,
                                             tickers=[pair[0]],
                                             features=[Features.CLOSE])
@@ -102,30 +104,32 @@ class Cointegrator:
                                             features=[Features.CLOSE])
             try:
                 residuals, beta, intercept = self.__lin_reg(x=t_etf, y=t_snp)
-            except Exception as e:
-                print(e)
+            except:
                 continue
 
-            adf_test_statistic, adf_critical_values = self.__adf(residuals=residuals)
+            adf_test_statistic, adf_critical_values = self.__adf(residuals=residuals, adf_lag=adf_lag)
             if adf_test_statistic < adf_critical_values[self.adf_confidence_level.value] and (beta > 0):
-                #z score based on current prices
-                snp_current_price = t_snp.iloc[-1, 0]
-                erf_current_price =  t_etf.iloc[-1, 0]
-                z = np.log(snp_current_price) - beta * np.log(erf_current_price) - intercept
-                cointegration_rank = self.__score_coint(t_stat=adf_test_statistic,
-                                                        confidence_level=self.adf_confidence_level,
-                                                        crit_values=adf_critical_values)
-                cointegrated_pair = CointegratedPair(pair=pair, intercept=intercept, beta=beta,
-                                                     z_score=float(z), cointegration_rank=cointegration_rank)
-                results_queue.put(cointegrated_pair)
-
+                hurst_test = self.__hurst_exponent_test(residuals, current_window)
+                zero_crossings = np.where(np.diff(np.sign(residuals)))[0]
+                if hurst_test < 0.1 and len(zero_crossings) > int(current_window.window_length.days/8):
+                    snp_current_price = t_snp.iloc[-1, 0]
+                    etf_current_price = t_etf.iloc[-1, 0]
+                    z = np.log(snp_current_price) - beta*np.log(etf_current_price) - intercept
+                    cointegration_rank = self.__score_coint(t_stat=adf_test_statistic,
+                                                            confidence_level=self.adf_confidence_level,
+                                                            crit_values=adf_critical_values)
+                    cointegrated_pair = CointegratedPair(pair=pair, intercept=intercept, beta=beta,
+                                                         z_score=float(z), adf_tstat=adf_test_statistic,
+                                                         hurst_stat=hurst_test, cointegration_rank=cointegration_rank)
+                    results_queue.put(cointegrated_pair)
 
     def parallel_generate_pairs(self, clustering_results: Dict[int, List],
-                                current_window: Window) -> Tuple[List, List]:
+                                current_window: Window, adf_lag: int) -> Tuple[List, List]:
         """
         Parameters:
             clustering_results: dictionary of clusters
             current_window: time window
+            adf_lag: adf test lag
 
         Returns:
              current_cointegrated_pairs: list of all cointegrated pairs
@@ -139,7 +143,7 @@ class Cointegrator:
 
         for i in range(num_processes):
             new_process = mp.Process(target=self.regression_tests, args=(current_window,
-                                                                         pair_queue, result_queue))
+                                                                         pair_queue, result_queue, adf_lag))
             processes.append(new_process)
             new_process.start()
 
@@ -175,13 +179,14 @@ class Cointegrator:
 
         reg_output = LinearRegression().fit(x, y)
         residuals = y - reg_output.predict(x)
+        residuals = np.concatenate(residuals, axis=0)
         beta = float(reg_output.coef_[0])
         intercept = reg_output.intercept_
 
         return residuals, beta, intercept
 
     @staticmethod
-    def __adf(residuals: array) -> Tuple[float, Dict[str, float]]:
+    def __adf(residuals: array, adf_lag: int) -> Tuple[float, Dict[str, float]]:
         """
         Performs Augmented Dickey-Fuller test (with constant but no trend)
 
@@ -189,31 +194,62 @@ class Cointegrator:
             adf_test_statistic: t-statistic
             adf_critical_values: dictionary of critical values at 1%, 5%, 10% confidence levels
         """
-        adf_results = adfuller(residuals)
+        adf_results = adfuller(x=residuals, regression="c", maxlag=adf_lag, autolag=None)
         adf_test_statistic: float = adf_results[0]
         adf_critical_values: Dict[str, float] = adf_results[4]
 
         return adf_test_statistic, adf_critical_values
 
     @staticmethod
+    def __hurst_exponent_test(residuals, current_window: Window) -> float:
+        """
+        Returns Hurst exponent by calculating variance of the difference between lagged returns and performing
+        regression of the variance on the lag.
+        https://towardsdatascience.com/introduction-to-the-hurst-exponent-with-code-in-python-4da0414ca52e
+        Parameters:
+            residuals: regression residuals
+            current_window: time window
+        Returns
+            hurst_exp: Hurst exponent
+        """
+        # Lag vector
+        tau_vector = []
+        # Variance vector
+        variance_delta_vector = []
+        max_lags = int(current_window.window_length.days*0.5)
+
+        for lag in range(2, max_lags):
+            tau_vector.append(lag)
+            delta_res = residuals[lag:] - residuals[:-lag]
+            variance_delta_vector.append(np.var(delta_res))
+
+        variance_delta_vector = np.log(variance_delta_vector)
+        tau_vector = np.log(tau_vector)
+
+        reg_output = LinearRegression().fit(tau_vector.reshape(-1, 1), variance_delta_vector.reshape(-1, 1))
+        beta = float(reg_output.coef_[0])
+        hurst_exp = beta / 2
+
+        return hurst_exp
+
+    @staticmethod
     def __score_coint(t_stat: float, confidence_level: AdfPrecisions,
-                      crit_values: Dict[str, float]) ->float:
+                      crit_values: Dict[str, float]) -> float:
         dist = abs(t_stat - crit_values[confidence_level.value])
         return dist
 
 
 if __name__ == "__main__":
-    win = Window(window_start=date(2008, 10, 3), trading_win_len=timedelta(days=60), repository=DataRepository())
+    lookback_win_len = 150
+    adflag = int((lookback_win_len/2) - 3)
+    win = Window(window_start=date(2008, 10, 3), trading_win_len=timedelta(days=lookback_win_len), repository=DataRepository())
 
     clusterer = Clusterer()
-    #can we play around with eps?
     clusters = clusterer.dbscan(eps=0.1, min_samples=2, window=win)
-    print(clusters)
 
-    #spreads of cointegrated pairs with log prices lie on the range (-0.3, 0.3)
-    c = Cointegrator(repository=DataRepository(), adf_confidence_level=AdfPrecisions.ONE_PCT,
-                     max_rev_time=10, entry_z=0.15, exit_z=0.2)
-    cointegrated_pairs = c.parallel_generate_pairs(clustering_results=clusters,  current_window=win)
+    c = Cointegrator(repository=DataRepository(), adf_confidence_level=AdfPrecisions.ONE_PCT, entry_z=0.1, exit_z=0.2)
+    cointegrated_pairs = c.parallel_generate_pairs(clustering_results=clusters,  current_window=win, adf_lag=adflag)
 
     for pair in cointegrated_pairs[1]:
-        print(pair.pair, round(float(pair.beta),3), round(float(pair.intercept),3), round(float(pair.z_score),5))
+        print("Pair ", pair.pair, "Beta: ", round(float(pair.beta), 3), "Intercept: ",
+              round(float(pair.intercept), 3), "Z score: ", round(float(pair.z_score), 5), "t stat: ", round(float(pair.adf_tstat), 5))
