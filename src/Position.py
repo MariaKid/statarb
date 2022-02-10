@@ -7,8 +7,16 @@ from src.Window import Window
 
 
 class Position:
-    def __init__(self, ticker1: Tickers, ticker2: Tickers, value1: float, value2: float,
-                 investment_type: PositionType, init_z: float, init_date: date, init_value: float = 0,
+    def __init__(self, ticker1: Tickers,
+                 ticker2: Tickers,
+                 value1: float,
+                 value2: float,
+                 investment_type: PositionType,
+                 init_z: float,
+                 init_date: date,
+                 beta: float,
+                 intercept: float,
+                 init_value: float = 0,
                  commission: float = 0):
         self.asset1: Tickers = ticker1
         self.asset2: Tickers = ticker2
@@ -16,6 +24,8 @@ class Position:
         self.value2: float = value2
         self.position_type: PositionType = investment_type
         self.init_z = init_z
+        self.beta: float = beta
+        self.intercept: float = intercept
         self.init_date = init_date
         self.init_value: float = init_value
         self.commission: float = commission
@@ -26,7 +36,7 @@ class Position:
         self.simple_return: float = 0
         self.current_value: float = init_value
         self.pos_hist = list()
-        self.closed = False
+        self.closed: bool = False
 
     def set_position_value(self, value: float) -> None:
         """
@@ -45,7 +55,7 @@ class Position:
 
         Parameters:
             value: current value of pair
-            window:
+            window: time window
         """
         if not self.closed:
             self.pnl += value - self.current_value
@@ -59,7 +69,7 @@ class Position:
 
         Parameters:
             value: current value of pair
-            window:
+            window: time window
         """
         self.pnl += value - self.current_value - self.commission
         self.current_value = value

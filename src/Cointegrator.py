@@ -14,8 +14,8 @@ from src.DataRepository import Universes
 from src.Window import Window
 from src.Features import Features
 from src.Tickers import Tickers, SnpTickers, EtfTickers
+from src.Kalman import kalman
 
-#modules needed for testing cointegrator
 # modules needed for testing cointegrator
 from src.Clusterer import Clusterer
 from datetime import date, timedelta
@@ -79,13 +79,16 @@ class Cointegrator:
                             queue.put(pair)
         return queue
 
-    def regression_tests(self, current_window: Window, test_queue, results_queue, adf_lag: int) -> None:
+    def regression_tests(self, current_window: Window, test_queue, results_queue,
+                         hurst_threshold: float, zero_crossings_ratio: int, adf_lag: int) -> None:
         """
         Fetches SNP + ETF pairs from queue, performs cointegration test and puts pair in queue if cointegration test
         passed
 
         Parameters:
             current_window: time window
+            hurst_threshold: threshold for hurst exponent test
+            zero_crossings_ratio: divides by window length to find threshold number of zero crossings
             test_queue: queue of pairs to be tested for cointegration
             results_queue: queue of cointegrated pairs
             adf_lag: lag in adf test set to length of lookback window
@@ -96,6 +99,7 @@ class Cointegrator:
                 pair = test_queue.get(timeout=1)
             except q.Empty:
                 break
+            print(pair)
             t_snp = current_window.get_data(universe=Universes.SNP,
                                             tickers=[pair[0]],
                                             features=[Features.CLOSE])
@@ -111,10 +115,10 @@ class Cointegrator:
             if adf_test_statistic < adf_critical_values[self.adf_confidence_level.value] and (beta > 0):
                 hurst_test = self.__hurst_exponent_test(residuals, current_window)
                 zero_crossings = np.where(np.diff(np.sign(residuals)))[0]
-                if hurst_test < 0.1 and len(zero_crossings) > int(current_window.window_length.days/8):
+                if hurst_test < hurst_threshold and len(zero_crossings) > int(current_window.window_length.days/zero_crossings_ratio):
                     snp_current_price = t_snp.iloc[-1, 0]
                     etf_current_price = t_etf.iloc[-1, 0]
-                    z = np.log(snp_current_price) - beta*np.log(etf_current_price) - intercept
+                    z = np.log(snp_current_price) - beta * np.log(etf_current_price) - intercept
                     cointegration_rank = self.__score_coint(t_stat=adf_test_statistic,
                                                             confidence_level=self.adf_confidence_level,
                                                             crit_values=adf_critical_values)
@@ -124,17 +128,18 @@ class Cointegrator:
                     results_queue.put(cointegrated_pair)
 
     def parallel_generate_pairs(self, clustering_results: Dict[int, List],
-                                current_window: Window, adf_lag: int) -> Tuple[List, List]:
+                                current_window: Window, hurst_threshold: float,
+                                zero_crossings_ratio: int, adf_lag: int) -> Tuple[List, List]:
         """
         Parameters:
             clustering_results: dictionary of clusters
             current_window: time window
+            hurst_threshold: threshold for hurst exponent test
+            zero_crossings_ratio: divides by window length to find threshold number of zero crossings
             adf_lag: adf test lag
 
         Returns:
-             current_cointegrated_pairs: list of all cointegrated pairs
-             selected_cointegrated_pairs: list of cointegrated pairs with z_score > z_entry ranked according to their
-             cointegration score
+             current_cointegrated_pairs: list of all cointegrated pairs ranked according to t-stat
         """
         num_processes = mp.cpu_count()
         processes = []
@@ -143,7 +148,8 @@ class Cointegrator:
 
         for i in range(num_processes):
             new_process = mp.Process(target=self.regression_tests, args=(current_window,
-                                                                         pair_queue, result_queue, adf_lag))
+                                                                         pair_queue, result_queue, hurst_threshold,
+                                                                         zero_crossings_ratio, adf_lag))
             processes.append(new_process)
             new_process.start()
 
@@ -239,17 +245,12 @@ class Cointegrator:
         return dist
 
 
-if __name__ == "__main__":
-    lookback_win_len = 150
-    adflag = int((lookback_win_len/2) - 3)
-    win = Window(window_start=date(2008, 10, 3), trading_win_len=timedelta(days=lookback_win_len), repository=DataRepository())
 
-    clusterer = Clusterer()
-    clusters = clusterer.dbscan(eps=0.1, min_samples=2, window=win)
 
-    c = Cointegrator(repository=DataRepository(), adf_confidence_level=AdfPrecisions.ONE_PCT, entry_z=0.1, exit_z=0.2)
-    cointegrated_pairs = c.parallel_generate_pairs(clustering_results=clusters,  current_window=win, adf_lag=adflag)
 
-    for pair in cointegrated_pairs[1]:
-        print("Pair ", pair.pair, "Beta: ", round(float(pair.beta), 3), "Intercept: ",
-              round(float(pair.intercept), 3), "Z score: ", round(float(pair.z_score), 5), "t stat: ", round(float(pair.adf_tstat), 5))
+
+
+
+
+
+

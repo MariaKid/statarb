@@ -16,7 +16,7 @@ class Window:
         self.window_length: timedelta = trading_win_len
         self.repository: DataRepository = repository
 
-        self.window_end = self.__get_nth_working_day_ahead(window_start, trading_win_len.days-1)
+        self.window_end = self.get_nth_working_day_ahead(window_start, trading_win_len.days-1)
         self.lookback_win_dates = self.__get_window_trading_days(window_start, trading_win_len)
         self.__update_window_data(self.lookback_win_dates)
 
@@ -82,13 +82,13 @@ class Window:
         """
         Shifts the window to the next day and updates the data for the new window by calling self.__update_window_data
         """
-        self.window_start = self.__get_nth_working_day_ahead(self.window_start, 1)
-        self.window_end = self.__get_nth_working_day_ahead(self.window_end, 1)
+        self.window_start = self.get_nth_working_day_ahead(self.window_start, 1)
+        self.window_end = self.get_nth_working_day_ahead(self.window_end, 1)
 
         self.lookback_win_dates = self.__get_window_trading_days(self.window_start, self.window_length)
         self.__update_window_data(self.lookback_win_dates)
 
-    def __get_nth_working_day_ahead(self, target: date, n: int) -> date:
+    def get_nth_working_day_ahead(self, target: date, n: int) -> date:
         """
         Parameters:
             target: starting date

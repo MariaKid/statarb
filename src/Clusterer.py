@@ -1,17 +1,10 @@
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 
-from datetime import date, timedelta
 from sklearn.cluster import DBSCAN
 from typing import Dict, List
-from src.DataRepository import Universes, DataRepository
+from src.DataRepository import Universes
 from src.Features import Features
-from src.Window import Window
-from src.Tickers import EtfTickers, SnpTickers
-
-pd.options.display.max_columns = None
-pd.options.display.max_rows = None
 
 
 class Clusterer:
@@ -80,17 +73,3 @@ class Clusterer:
             clusters[cluster_num] = tickers_in_cluster.values
 
         return clusters
-
-
-if __name__ == "__main__":
-    clusterer = Clusterer()
-    win = Window(window_start=date(2008, 1, 2), trading_win_len=timedelta(days=60), repository=DataRepository())
-    # clusters = clusterer.dbscan(eps=0.1, min_samples=2, window=win)
-
-    df2 = win.get_data(universe=Universes.SNP, tickers=[SnpTickers.NSC], features=[Features.CLOSE])
-    t2 = win.get_data(universe=Universes.ETFs, tickers=[EtfTickers.IGE], features=[Features.CLOSE])
-
-    plt.figure(1, figsize=(10, 7))
-    plt.plot(df2.index, df2.pct_change().values)
-    plt.plot(t2.index, t2.pct_change().values)
-    plt.show()

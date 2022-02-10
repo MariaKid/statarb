@@ -30,7 +30,7 @@ class Portfolio:
         self.realised_pnl: float = float(0)
         self.log_return: float = float(0)
         self.cum_return: float = float(0)
-        self.t_cost: float = float(0.0005)
+        self.t_cost: float = float(0.01)
         self.timestamp = datetime.now().strftime("%Y%m%d%H%M")
         self.port_hist: List = list()
         self.loading: float = float(0.1)
@@ -61,8 +61,8 @@ class Portfolio:
             position.quantity1 = int(position.value1 / cur_price.iloc[-1, 0])
             position.quantity2 = int(position.value2 / cur_price.iloc[-1, 1])
 
-            asset1_value = cur_price.iloc[-1, 0] * position.quantity1
-            asset2_value = cur_price.iloc[-1, 1] * position.quantity2
+            asset1_value = cur_price.iloc[-1, 0]*position.quantity1
+            asset2_value = cur_price.iloc[-1, 1]*position.quantity2
 
             commission = self.generate_commission(asset1_value, asset2_value)
 
@@ -114,8 +114,8 @@ class Portfolio:
             self.number_active_pairs -= 1
             self.cur_positions.remove(position)
 
-            asset1_value = cur_price.iloc[-1, 0] * position.quantity1
-            asset2_value = cur_price.iloc[-1, 1] * position.quantity2
+            asset1_value = cur_price.iloc[-1, 0]*position.quantity1
+            asset2_value = cur_price.iloc[-1, 1]*position.quantity2
             commission = self.generate_commission(asset1_value, asset2_value)
             pair_residual_cash = asset1_value + asset2_value
             position.close_trade(pair_residual_cash, self.current_window)
@@ -155,9 +155,9 @@ class Portfolio:
 
         for pair in self.cur_positions:
             df3 = self.current_window.get_data(universe=Universes.SNP, tickers=[pair.asset1],
-                                               features=[Features.CLOSE]).loc[pd.Timestamp(today)].values
+                                               features=[Features.CLOSE]).loc[today].values
             df4 = self.current_window.get_data(universe=Universes.ETFs, tickers=[pair.asset2],
-                                               features=[Features.CLOSE]).loc[pd.Timestamp(today)].values
+                                               features=[Features.CLOSE]).loc[today].values
 
             todays_prices = [df3, df4]
             asset_value = todays_prices[0] * pair.quantity1 + todays_prices[1] * pair.quantity2
@@ -237,7 +237,7 @@ class Portfolio:
 
         tbill.index += timedelta(1)
         tbill_mean = tbill.loc[tbill.index.intersection(prc_hist.index)].mean().values
-        print(get_performance_stats(prc_hist, tbill_mean))
+        # print(get_performance_stats(prc_hist, tbill_mean))
 
         all_history = self.get_port_hist()
         sp = yf.download("^GSPC", start=min(all_history.index), end=max(all_history.index))[["Adj Close"]]["Adj Close"]
@@ -261,5 +261,3 @@ class Portfolio:
         plt.tight_layout()
         plt.savefig("{time.time()}_total_capital.png", dpi=200)
         plt.show()
-
-

@@ -14,19 +14,18 @@ class Decision:
 
 
 class SignalGenerator:
-    def __init__(self, port: Portfolio, entry_z: float, exit_z: float, emergency_delta_z: float):
+    def __init__(self, port: Portfolio, entry_z: float, exit_z: float, emergency_delta_z: float, time_stop_loss: int):
         self.port: Portfolio = port
         self.entry_z: float = entry_z
         self.exit_z: float = exit_z
         self.emergency_delta_z: float = emergency_delta_z
+        self.time_stop_loss: int = time_stop_loss
 
         self.filter = Filters()
-        self.time_stop_loss = 20
-        self.natural_close_count = 0
-        self.emergency_coint_close_count = 0
-        self.emergency_close_count = 0
-        self.time_stop_loss_count = 0
-        self.volume_shock_filter = 0
+        self.natural_close_count: int = 0
+        self.emergency_close_count: int = 0
+        self.time_stop_loss_count: int = 0
+        self.volume_shock_filter: int = 0
 
     def make_decision(self, pairs: List[CointegratedPair], selected_pairs: List[CointegratedPair]) -> List[Decision]:
         """
@@ -40,7 +39,6 @@ class SignalGenerator:
 
         # List of tickers of current position pairs
         positions = self.port.cur_positions
-        current_posn_pairs = [[i.asset1, i.asset2] for i in positions]
 
         # List of tickers of cointegrated pairs
         coint_pairs = [i.pair for i in pairs]
