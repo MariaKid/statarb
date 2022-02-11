@@ -30,7 +30,7 @@ class Portfolio:
         self.realised_pnl: float = float(0)
         self.log_return: float = float(0)
         self.cum_return: float = float(0)
-        self.t_cost: float = float(0.01)
+        self.t_cost: float = float(0.005)
         self.timestamp = datetime.now().strftime("%Y%m%d%H%M")
         self.port_hist: List = list()
         self.loading: float = float(0.1)
@@ -52,17 +52,20 @@ class Portfolio:
             position: Position object to store new position
         """
         if self.number_active_pairs < self.max_active_pairs:
-            df1 = self.current_window.get_data(universe=Universes.SNP, tickers=[position.asset1],
-                                               features=[Features.CLOSE])
-            df2 = self.current_window.get_data(universe=Universes.ETFs, tickers=[position.asset2],
-                                               features=[Features.CLOSE])
-            cur_price = pd.concat([df1, df2], axis=1)
+            df_snp = self.current_window.get_data(universe=Universes.SNP, tickers=[position.asset1],
+                                                  features=[Features.CLOSE])
+            df_etf = self.current_window.get_data(universe=Universes.ETFs, tickers=[position.asset2],
+                                                  features=[Features.CLOSE])
 
-            position.quantity1 = int(position.value1 / cur_price.iloc[-1, 0])
-            position.quantity2 = int(position.value2 / cur_price.iloc[-1, 1])
+            cur_price = pd.concat([df_snp, df_etf], axis=1)
+            price_snp = cur_price.iloc[-1, 0]
+            price_etf = cur_price.iloc[-1, 1]
 
-            asset1_value = cur_price.iloc[-1, 0]*position.quantity1
-            asset2_value = cur_price.iloc[-1, 1]*position.quantity2
+            position.quantity1 = int(position.value1 / price_snp)
+            position.quantity2 = int(position.value2 / price_etf)
+
+            asset1_value = price_snp*position.quantity1
+            asset2_value = price_etf*position.quantity2
 
             commission = self.generate_commission(asset1_value, asset2_value)
 
@@ -72,7 +75,7 @@ class Portfolio:
             if pair_dedicated_cash > self.cur_cash:
                 self.logger.info('Not sufficient cash to open position')
             else:
-                self.logger.info("%s, %s are cointegrated and z-score is in trading range. Opening position....",
+                self.logger.info("%s, %s are cointegrated and spread is in trading range. Opening position....",
                                  position.asset1, position.asset2)
                 self.number_active_pairs += 1
                 self.open_count += 1
@@ -89,8 +92,9 @@ class Portfolio:
                                  round(cur_price.iloc[-1, 1], 2), round(position.quantity2, 2), round(asset2_value, 2))
                 self.logger.info('Cash balance: $%s', self.cur_cash)
 
-                print("open a new position", position.asset1, position.asset2, round(asset1_value, 2),
-                      round(asset2_value, 2), "init_z: ", round(position.init_z, 2), position.position_type)
+                print("open a new position", position.asset1, round(asset1_value, 2), position.asset2,
+                      round(asset2_value, 2), "spread: ", round(position.spread, 5),
+                      "spread_std: ", round(position.spread_std, 5), position.position_type)
         else:
             pass
 

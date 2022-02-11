@@ -8,17 +8,20 @@ from numpy import array
 from pandas import DataFrame
 from sklearn.linear_model import LinearRegression
 from statsmodels.tsa.api import adfuller
+from warnings import simplefilter
 
 from src.DataRepository import DataRepository
 from src.DataRepository import Universes
 from src.Window import Window
 from src.Features import Features
 from src.Tickers import Tickers, SnpTickers, EtfTickers
-from src.Kalman import kalman
+from src.Kalman import parallel_kalman
 
 # modules needed for testing cointegrator
 from src.Clusterer import Clusterer
 from datetime import date, timedelta
+
+simplefilter(action='ignore', category=FutureWarning)
 
 
 @unique
@@ -32,30 +35,18 @@ class CointegratedPair:
     def __init__(self,
                  pair: List[Tickers],
                  beta: float,
-                 intercept: float,
-                 z_score: float,
-                 adf_tstat: float,
-                 hurst_stat: float,
-                 cointegration_rank: float):
+                 spread: float):
         self.pair: List[Tickers] = pair
         self.beta: float = beta
-        self.intercept: float = intercept
-        self.z_score: float = z_score
-        self.adf_tstat: float = adf_tstat
-        self.hurst_stat: float = hurst_stat
-        self.cointegration_rank: float = cointegration_rank
+        self.spread: float = spread
 
 
 class Cointegrator:
     def __init__(self,
                  repository: DataRepository,
-                 adf_confidence_level: AdfPrecisions,
-                 entry_z: float,
-                 exit_z: float):
+                 adf_confidence_level: AdfPrecisions):
         self.repository: DataRepository = repository
         self.adf_confidence_level: AdfPrecisions = adf_confidence_level
-        self.entry_z: float = entry_z
-        self.exit_z: float = exit_z
 
     @staticmethod
     def load_queue(clustering_results: Dict[int, List]):
@@ -79,8 +70,8 @@ class Cointegrator:
                             queue.put(pair)
         return queue
 
-    def regression_tests(self, current_window: Window, test_queue, results_queue,
-                         hurst_threshold: float, zero_crossings_ratio: int, adf_lag: int) -> None:
+    def regression_tests(self, current_window: Window, test_queue, results_queue, hurst_threshold: float,
+                         adf_lag: int) -> None:
         """
         Fetches SNP + ETF pairs from queue, performs cointegration test and puts pair in queue if cointegration test
         passed
@@ -88,9 +79,9 @@ class Cointegrator:
         Parameters:
             current_window: time window
             hurst_threshold: threshold for hurst exponent test
-            zero_crossings_ratio: divides by window length to find threshold number of zero crossings
             test_queue: queue of pairs to be tested for cointegration
-            results_queue: queue of cointegrated pairs
+            results_queue: queue of cointegrated pairs (objects in queue in the form List[List[SnpTicker, EtfTicker],
+            cointegration_rank [abs(t-stat - critical value)])
             adf_lag: lag in adf test set to length of lookback window
         """
         while not test_queue.empty():
@@ -99,43 +90,40 @@ class Cointegrator:
                 pair = test_queue.get(timeout=1)
             except q.Empty:
                 break
-            print(pair)
+
             t_snp = current_window.get_data(universe=Universes.SNP,
                                             tickers=[pair[0]],
                                             features=[Features.CLOSE])
             t_etf = current_window.get_data(universe=Universes.ETFs,
                                             tickers=[pair[1]],
                                             features=[Features.CLOSE])
+
+            # Added as sometimes a row is duplicated (likely a problem in src.DataRepository)
+            t_etf = t_etf[~t_etf.index.duplicated(keep='first')]
+            t_snp = t_snp[~t_snp.index.duplicated(keep='first')]
+
             try:
-                residuals, beta, intercept = self.__lin_reg(x=t_etf, y=t_snp)
+                residuals = self.__lin_reg(x=t_etf, y=t_snp)
             except:
+                print(True)
                 continue
 
             adf_test_statistic, adf_critical_values = self.__adf(residuals=residuals, adf_lag=adf_lag)
-            if adf_test_statistic < adf_critical_values[self.adf_confidence_level.value] and (beta > 0):
+            if adf_test_statistic < adf_critical_values[self.adf_confidence_level.value]:
                 hurst_test = self.__hurst_exponent_test(residuals, current_window)
-                zero_crossings = np.where(np.diff(np.sign(residuals)))[0]
-                if hurst_test < hurst_threshold and len(zero_crossings) > int(current_window.window_length.days/zero_crossings_ratio):
-                    snp_current_price = t_snp.iloc[-1, 0]
-                    etf_current_price = t_etf.iloc[-1, 0]
-                    z = np.log(snp_current_price) - beta * np.log(etf_current_price) - intercept
+                if hurst_test < hurst_threshold:
                     cointegration_rank = self.__score_coint(t_stat=adf_test_statistic,
                                                             confidence_level=self.adf_confidence_level,
                                                             crit_values=adf_critical_values)
-                    cointegrated_pair = CointegratedPair(pair=pair, intercept=intercept, beta=beta,
-                                                         z_score=float(z), adf_tstat=adf_test_statistic,
-                                                         hurst_stat=hurst_test, cointegration_rank=cointegration_rank)
-                    results_queue.put(cointegrated_pair)
+                    results_queue.put([pair, cointegration_rank])
 
     def parallel_generate_pairs(self, clustering_results: Dict[int, List],
-                                current_window: Window, hurst_threshold: float,
-                                zero_crossings_ratio: int, adf_lag: int) -> Tuple[List, List]:
+                                current_window: Window, hurst_threshold: float, adf_lag: int):
         """
         Parameters:
             clustering_results: dictionary of clusters
             current_window: time window
             hurst_threshold: threshold for hurst exponent test
-            zero_crossings_ratio: divides by window length to find threshold number of zero crossings
             adf_lag: adf test lag
 
         Returns:
@@ -149,7 +137,7 @@ class Cointegrator:
         for i in range(num_processes):
             new_process = mp.Process(target=self.regression_tests, args=(current_window,
                                                                          pair_queue, result_queue, hurst_threshold,
-                                                                         zero_crossings_ratio, adf_lag))
+                                                                         adf_lag))
             processes.append(new_process)
             new_process.start()
 
@@ -160,25 +148,18 @@ class Cointegrator:
         for k in range(result_queue.qsize()):
             current_cointegrated_pairs.append(result_queue.get())
 
-        current_cointegrated_pairs = sorted(current_cointegrated_pairs,
-                                            key=lambda coint_pair: coint_pair.cointegration_rank, reverse=True)
+        # x[1] is the cointegration score
+        current_cointegrated_pairs = sorted(current_cointegrated_pairs, key=lambda x: x[1], reverse=True)
 
-        selected_cointegrated_pairs = []
-        for p in current_cointegrated_pairs:
-            if abs(p.z_score) > self.entry_z:
-                selected_cointegrated_pairs.append(p)
-
-        return current_cointegrated_pairs, selected_cointegrated_pairs
+        return current_cointegrated_pairs
 
     @staticmethod
-    def __lin_reg(x: DataFrame, y: DataFrame) -> Tuple[array, array, float]:
+    def __lin_reg(x: DataFrame, y: DataFrame) -> array:
         """
         Runs linear regression of y on x
 
         Returns:
             residuals: regression residuals
-            residuals_sum: cumulative residuals
-            beta: beta of regression
         """
         x = np.array(np.log(x))
         y = np.array(np.log(y))
@@ -186,10 +167,8 @@ class Cointegrator:
         reg_output = LinearRegression().fit(x, y)
         residuals = y - reg_output.predict(x)
         residuals = np.concatenate(residuals, axis=0)
-        beta = float(reg_output.coef_[0])
-        intercept = reg_output.intercept_
 
-        return residuals, beta, intercept
+        return residuals
 
     @staticmethod
     def __adf(residuals: array, adf_lag: int) -> Tuple[float, Dict[str, float]]:
@@ -245,12 +224,18 @@ class Cointegrator:
         return dist
 
 
+if __name__ == '__main__':
 
+    lookback_win_len = 90
+    adflag = int((lookback_win_len / 2) - 3)
+    win = Window(window_start=date(2009, 10, 6), trading_win_len=timedelta(days=lookback_win_len),
+                 repository=DataRepository())
 
+    clusterer = Clusterer()
+    clusters = clusterer.dbscan(eps=0.1, min_samples=2, window=win)
 
+    c = Cointegrator(repository=DataRepository(), adf_confidence_level=AdfPrecisions.ONE_PCT)
+    cointegrated_pairs = c.parallel_generate_pairs(clustering_results=clusters, current_window=win,
+                                                   hurst_threshold=0.3, adf_lag=adflag)
 
-
-
-
-
-
+    print(cointegrated_pairs)
