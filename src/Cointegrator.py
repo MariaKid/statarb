@@ -161,8 +161,8 @@ class Cointegrator:
         Returns:
             residuals: regression residuals
         """
-        x = np.array(np.log(x))
-        y = np.array(np.log(y))
+        x = np.array(x)
+        y = np.array(y)
 
         reg_output = LinearRegression().fit(x, y)
         residuals = y - reg_output.predict(x)

@@ -93,8 +93,7 @@ class Portfolio:
                 self.logger.info('Cash balance: $%s', self.cur_cash)
 
                 print("open a new position", position.asset1, round(asset1_value, 2), position.asset2,
-                      round(asset2_value, 2), "spread: ", round(position.spread, 5),
-                      "spread_std: ", round(position.spread_std, 5), position.position_type)
+                      round(asset2_value, 2), "z_score: ", round(position.z_score, 5), position.position_type)
         else:
             pass
 

@@ -12,23 +12,23 @@ class Position:
                  value1: float,
                  value2: float,
                  investment_type: PositionType,
-                 spread: float,
-                 spread_std: float,
+                 z_score: float,
                  init_date: date,
                  beta: float,
                  init_value: float = 0,
-                 commission: float = 0):
+                 commission: float = 0,
+                 it: int = 0):
         self.asset1: Tickers = ticker1
         self.asset2: Tickers = ticker2
         self.value1: float = value1
         self.value2: float = value2
         self.position_type: PositionType = investment_type
-        self.spread = spread
-        self.spread_std = spread_std
+        self.z_score: float = z_score
         self.beta: float = beta
         self.init_date = init_date
         self.init_value: float = init_value
         self.commission: float = commission
+        self.it: int = it
 
         self.pnl: float = -commission
         self.quantity1: float = 0

@@ -18,13 +18,15 @@ class PairTrader:
                  logger: logging.Logger,
                  backtest_start: date = date(2009, 10, 6),
                  max_active_pairs: int = 10,
-                 trading_window_length: timedelta = timedelta(days=90),
-                 adf_lag: int = int((90/2)-3),
+                 trading_window_length: timedelta = timedelta(days=120),
+                 adf_lag: int = int((120/2)-3),
                  trading_freq: timedelta = timedelta(days=10),
                  backtest_end: Optional[date] = None,
                  adf_confidence_level: AdfPrecisions = AdfPrecisions.ONE_PCT,
                  hurst_exp_threshold: float = 0.3,
-                 emergency_delta_spread: float = 1):
+                 entry_z: float = 2.5,
+                 exit_z: float = 0.5,
+                 emergency_delta_z: float = 3):
 
         self.logger: logging.Logger = logger
         self.backtest_start: date = backtest_start
@@ -35,7 +37,9 @@ class PairTrader:
         self.backtest_end = backtest_end
         self.adf_confidence_level: AdfPrecisions = adf_confidence_level
         self.hurst_exp_threshold: float = hurst_exp_threshold
-        self.emergency_delta_spread: float = emergency_delta_spread
+        self.entry_z: float = entry_z
+        self.exit_z: float = exit_z
+        self.emergency_delta_z: float = emergency_delta_z
 
         self.logger.info("Creating new portfolio...")
 
@@ -45,7 +49,6 @@ class PairTrader:
                                              repository=self.repository)
 
         self.today = self.current_window.window_end
-        print(self.today)
         self.day_count: int = 0
 
         self.clusterer = Clusterer()
@@ -60,8 +63,10 @@ class PairTrader:
                                               logger=self.logger)
 
         self.dm = SignalGenerator(port=self.portfolio,
-                                  time_stop_loss=60,
-                                  emergency_delta_spread=self.emergency_delta_spread)
+                                  time_stop_loss=70,
+                                  entry_z=self.entry_z,
+                                  exit_z=self.exit_z,
+                                  emergency_delta_z=self.emergency_delta_z)
 
         self.counter: int = 0
 
@@ -77,7 +82,6 @@ class PairTrader:
 
                 print("Clustering...")
                 clusters = self.clusterer.dbscan(eps=0.1, min_samples=2, window=self.current_window)
-                # eps = 0.2
 
                 print("Cointegrating...")
                 cointegrated_pairs = self.cointegrator.parallel_generate_pairs(clustering_results=clusters,
@@ -85,17 +89,12 @@ class PairTrader:
                                                                                adf_lag=self.adf_lag,
                                                                                hurst_threshold=self.hurst_exp_threshold)
 
-                print(cointegrated_pairs)
-
                 print("Kalman filtering...")
                 kalman_parallel_pairs = parallel_kalman(current_cointegrated_pairs=cointegrated_pairs,
-                                                        start_date=self.backtest_start, end_date=self.today,
-                                                        window=self.current_window)
-
-                print(kalman_parallel_pairs)
+                                                        window=self.current_window, entry_z=self.entry_z)
 
                 print("Making decisions...")
-                decisions = self.dm.make_decision(kalman_parallel_pairs, self.backtest_start)
+                decisions = self.dm.make_decision(kalman_parallel_pairs)
                 print("Executing...")
                 self.portfolio.execute_trades(decisions)
                 print("active pairs: ", self.portfolio.number_active_pairs)
