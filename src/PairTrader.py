@@ -16,15 +16,15 @@ from src.Kalman import parallel_kalman
 class PairTrader:
     def __init__(self,
                  logger: logging.Logger,
-                 backtest_start: date = date(2009, 10, 6),
+                 backtest_start: date = date(2008, 1, 2),
                  max_active_pairs: int = 10,
-                 trading_window_length: timedelta = timedelta(days=120),
-                 adf_lag: int = int((120/2)-3),
+                 trading_window_length: timedelta = timedelta(days=150),
+                 adf_lag: int = int((150/2)-3),
                  trading_freq: timedelta = timedelta(days=10),
                  backtest_end: Optional[date] = None,
                  adf_confidence_level: AdfPrecisions = AdfPrecisions.ONE_PCT,
-                 hurst_exp_threshold: float = 0.3,
-                 entry_z: float = 2.5,
+                 hurst_exp_threshold: float = 0.2,
+                 entry_z: float = 3,
                  exit_z: float = 0.5,
                  emergency_delta_z: float = 3):
 
@@ -81,7 +81,7 @@ class PairTrader:
                 self.counter = 0
 
                 print("Clustering...")
-                clusters = self.clusterer.dbscan(eps=0.1, min_samples=2, window=self.current_window)
+                clusters = self.clusterer.dbscan(eps=0.2, min_samples=2, window=self.current_window)
 
                 print("Cointegrating...")
                 cointegrated_pairs = self.cointegrator.parallel_generate_pairs(clustering_results=clusters,
@@ -98,6 +98,7 @@ class PairTrader:
                 print("Executing...")
                 self.portfolio.execute_trades(decisions)
                 print("active pairs: ", self.portfolio.number_active_pairs)
+                print("Realised PnL: ", self.portfolio.realised_pnl)
 
             print("Evolving...")
             self.__evolve()
@@ -129,7 +130,7 @@ if __name__ == '__main__':
     global_logger = logging.getLogger(__name__)
 
     PairTrader(
-        backtest_start=date(2009, 10, 6),
+        backtest_start=date(2008, 1, 2),
         logger=global_logger,
         backtest_end=date(2015, 1, 2)
     ).trade()

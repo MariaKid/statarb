@@ -58,9 +58,13 @@ class Position:
             window: time window
         """
         if not self.closed:
-            self.pnl += value - self.current_value
-            self.simple_return = value / self.current_value - 1
-            self.current_value = value
+            try:
+                self.pnl += value - self.current_value
+                self.simple_return = value / self.current_value - 1
+                self.current_value = value
+            except:
+                print("Error")
+                pass
         self.pos_hist.append([window.window_end, self.current_value, self.pnl, self.simple_return])
 
     def close_trade(self, value: float, window: Window) -> None:
